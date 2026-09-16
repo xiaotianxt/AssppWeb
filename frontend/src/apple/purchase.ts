@@ -3,6 +3,7 @@ import { appleRequest } from "./request";
 import { buildPlist, parsePlist } from "./plist";
 import { extractAndMergeCookies } from "./cookies";
 import { purchaseAPIHost } from "./config";
+import { getDownloadInfo } from "./download";
 import i18n from "../i18n";
 
 export class PurchaseError extends Error {
@@ -23,22 +24,37 @@ export async function purchaseApp(
     throw new PurchaseError(i18n.t("errors.purchase.paidNotSupported"));
   }
 
-  try {
-    return await purchaseWithParams(account, app, "STDQ");
-  } catch (e) {
-    // Rely on error code instead of translated message string to prevent matching issues
-    if (e instanceof PurchaseError && e.code === "2059") {
-      return await purchaseWithParams(account, app, "GAME");
-    }
-    throw e;
+  let result = await purchaseWithParams(account, app, "STDQ");
+  if (result.error?.code === "2059") {
+    result = await purchaseWithParams(
+      { ...account, cookies: result.updatedCookies },
+      app,
+      "GAME",
+    );
   }
+  if (!result.error) return { updatedCookies: result.updatedCookies };
+
+  // 5002 is ambiguous: require a download URL and SINF before treating this
+  // as an existing license. Keep rotated cookies out of the Error object.
+  if (result.error.code === "5002") {
+    try {
+      const { updatedCookies } = await getDownloadInfo(
+        { ...account, cookies: result.updatedCookies },
+        app,
+      );
+      return { updatedCookies };
+    } catch {
+      // Keep the purchase failure when entitlement cannot be verified.
+    }
+  }
+  throw result.error;
 }
 
 async function purchaseWithParams(
   account: Account,
   app: Software,
   pricingParameters: string,
-): Promise<{ updatedCookies: typeof account.cookies }> {
+): Promise<{ updatedCookies: typeof account.cookies; error?: PurchaseError }> {
   const deviceId = account.deviceIdentifier;
   const host = purchaseAPIHost(account.pod);
   const path = "/WebObjects/MZFinance.woa/wa/buyProduct";
@@ -82,6 +98,10 @@ async function purchaseWithParams(
     account.cookies,
   );
 
+  const fail = (message: string, code?: string) => ({
+    updatedCookies,
+    error: new PurchaseError(message, code),
+  });
   const dict = parsePlist(response.body) as Record<string, any>;
 
   if (dict.failureType) {
@@ -89,22 +109,16 @@ async function purchaseWithParams(
     const customerMessage = dict.customerMessage as string | undefined;
     switch (failureType) {
       case "2059":
-        throw new PurchaseError(i18n.t("errors.purchase.unavailable"), "2059");
+        return fail(i18n.t("errors.purchase.unavailable"), "2059");
       case "2034":
       case "2042":
-        throw new PurchaseError(
-          i18n.t("errors.purchase.passwordExpired"),
-          failureType,
-        );
+        return fail(i18n.t("errors.purchase.passwordExpired"), failureType);
       default: {
         if (customerMessage === "Your password has changed.") {
-          throw new PurchaseError(
-            i18n.t("errors.purchase.passwordExpired"),
-            failureType,
-          );
+          return fail(i18n.t("errors.purchase.passwordExpired"), failureType);
         }
         if (customerMessage === "Subscription Required") {
-          throw new PurchaseError(
+          return fail(
             i18n.t("errors.purchase.subscriptionRequired"),
             failureType,
           );
@@ -114,7 +128,7 @@ async function purchaseWithParams(
         if (action) {
           const actionUrl = (action.url || action.URL) as string | undefined;
           if (actionUrl && actionUrl.endsWith("termsPage")) {
-            throw new PurchaseError(
+            return fail(
               i18n.t("errors.purchase.termsRequired", { url: actionUrl }),
               failureType,
             );
@@ -130,8 +144,8 @@ async function purchaseWithParams(
           msg = i18n.t("errors.purchase.unknownError");
         }
 
-        throw new PurchaseError(
-          msg ?? i18n.t("errors.purchase.failed", { failureType }),
+        return fail(
+          `${msg ?? i18n.t("errors.purchase.failed", { failureType })} (${failureType})`,
           failureType,
         );
       }
@@ -142,7 +156,7 @@ async function purchaseWithParams(
   const status = dict.status as number | undefined;
 
   if (jingleDocType !== "purchaseSuccess" || status !== 0) {
-    throw new PurchaseError(i18n.t("errors.purchase.failedGeneral"));
+    return fail(i18n.t("errors.purchase.failedGeneral"));
   }
 
   return { updatedCookies };
