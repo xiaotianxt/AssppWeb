@@ -2,7 +2,7 @@ name: Build and Push Docker Image
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/r2-storage-preview]
     tags: ["v*"]
 
 env:
@@ -39,7 +39,8 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=r2-preview,enable=${{ github.ref == 'refs/heads/codex/r2-storage-preview' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=
@@ -49,8 +50,8 @@ jobs:
         with:
           context: .
           # linux/386 is not published by the official node images and the napi
-# binaries (@node-rs/crc32 via yauzl-promise) have no linux-ia32 build.
-platforms: linux/amd64,linux/arm64
+          # binaries (@node-rs/crc32 via yauzl-promise) have no linux-ia32 build.
+          platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
