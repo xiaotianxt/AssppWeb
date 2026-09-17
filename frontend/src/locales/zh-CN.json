@@ -167,6 +167,7 @@
       "paused": "已暂停",
       "completed": "已完成",
       "failed": "已失败",
+      "uploading": "上传至 R2",
       "injecting": "注入中"
     },
     "preview": {
@@ -200,6 +201,11 @@
       "noAccountsForRegion": "未找到该地区账号"
     },
     "package": {
+      "retryUpload": "重试上传",
+      "archive": "转存至 R2",
+      "archiveFailed": "无法开始上传至 R2",
+      "r2Links": "已存于 R2 · 下载和分享安装链接 15 分钟后过期",
+      "installLinkFailed": "无法生成安装链接，请刷新重试。",
       "title": "安装包详情",
       "notFound": "未找到下载。",
       "deleteConfirm": "删除此下载？",

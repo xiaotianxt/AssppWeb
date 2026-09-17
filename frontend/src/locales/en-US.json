@@ -167,6 +167,7 @@
       "paused": "Paused",
       "completed": "Completed",
       "failed": "Failed",
+      "uploading": "Uploading to R2",
       "injecting": "Injecting"
     },
     "preview": {
@@ -200,6 +201,11 @@
       "noAccountsForRegion": "No accounts found for this region"
     },
     "package": {
+      "retryUpload": "Retry upload",
+      "archive": "Move to R2",
+      "archiveFailed": "Could not start upload to R2",
+      "r2Links": "Stored in R2 · download and shared install links expire after 15 minutes",
+      "installLinkFailed": "Could not prepare the install link. Refresh to retry.",
       "title": "Package Details",
       "notFound": "Download not found.",
       "deleteConfirm": "Delete this download?",

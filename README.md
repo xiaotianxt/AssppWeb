@@ -95,6 +95,65 @@ AssppWeb relies on the Wisp protocol over WebSocket (`/wisp/`) for its zero-trus
 
 </details>
 
+## Optional Cloudflare R2 storage
+
+R2 stores **finished, signed IPAs**, not the working directory. Downloads and ZIP/SINF
+injection still use local disk. Local storage remains the default.
+
+Create a **private Standard-class bucket**, leave public access disabled, and issue
+an **Object Read & Write** S3 credential scoped to that bucket. Set these variables
+on the backend (use a private environment file or secret manager, never commit keys):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `R2_BUCKET` | unset | Enables R2; use a dedicated bucket |
+| `R2_ACCOUNT_ID` | required with R2 | Cloudflare account ID |
+| `R2_ACCESS_KEY_ID` | required with R2 | Bucket-scoped S3 access key |
+| `R2_SECRET_ACCESS_KEY` | required with R2 | Bucket-scoped S3 secret |
+| `R2_MAX_STORAGE_MB` | `3072` | Refuse uploads exceeding this stored-object quota; never evict packages |
+| `MAX_DOWNLOAD_MB` | `2048` with R2, otherwise `0` | Maximum source download size |
+| `MAX_ACTIVE_DOWNLOADS` | `1` with R2, otherwise `0` | Concurrent download/compile jobs; `0` disables the limit only in local mode |
+| `ACCESS_PASSWORD` | required with R2 | Protects the API that issues download/install links |
+
+Keep `AUTO_CLEANUP_DAYS=0` and `AUTO_CLEANUP_MAX_MB=0` when enabling R2. Startup
+rejects automatic eviction with remote storage. Configure `PUBLIC_BASE_URL` to the
+public HTTPS origin for iOS installation. The example Compose file passes the R2
+environment variables through, but the published upstream image does not contain
+this feature until released: build this source before using it.
+
+- New downloads upload after signing. Each multipart chunk is checked by MD5, then
+  the completed object's size and multipart ETag are checked. Only after the remote
+  location is atomically persisted may the local IPA be removed.
+- Failed/interrupted uploads retain the signed local IPA. **Retry upload** resumes
+  only the transfer; it does not fetch Apple again or repeat signing. A crash before
+  the remote record commits can leave an object at the same key; retry overwrites it.
+- Existing local packages stay local until you click **Move to R2**. There is no
+  automatic bulk migration. Back up `tasks.json` before migrating; it maps objects
+  to accounts/apps. Do not change buckets or share the prefix between server instances.
+- The browser fetches a short-lived link from the authenticated API and downloads
+  directly from R2, without forwarding the site's access token or buffering an IPA
+  in JavaScript. No public bucket domain or CORS policy is needed for this navigation.
+- R2 install/share links expire after **15 minutes**. Old permanent local install
+  links stop working for migrated packages; generate a new link in the UI. iOS
+  installation via R2 still needs device verification before production rollout.
+- The legacy `/api/packages/:id/file` route streams through the backend (including
+  Range requests) for clients using access headers. The UI uses `/link` for direct
+  delivery. Delete removes the R2 object before removing the task record, so failed
+  deletions can be retried. In-progress signing/uploading cannot be deleted.
+
+The quota covers committed objects under this bucket's `packages/` prefix, **not
+all Cloudflare account usage or a hard billing cap**. Uploads are serialized per
+process to make its quota check consistent. Use one instance per bucket/prefix.
+R2's incomplete multipart lifecycle (seven days by default) handles uploads abandoned
+by a process crash; consider shortening that lifecycle in the bucket settings. It
+must not delete completed objects behind the task manager's back.
+
+Keep roughly twice the largest concurrent IPA workload free locally for merging
+and ZIP updates. Full IPA files without a task record are retained for manual
+recovery rather than silently deleted; abandoned `.part` chunks are cleaned up.
+Back up `tasks.json` alongside the bucket. Disabling R2 leaves remote task records
+intact but makes their download/delete operations unavailable until reconfigured.
+
 ## Security Recommendations
 
 **DDoS Protection**

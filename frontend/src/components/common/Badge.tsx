@@ -6,6 +6,7 @@ interface BadgeProps {
     | 'downloading'
     | 'paused'
     | 'injecting'
+    | 'uploading'
     | 'completed'
     | 'failed';
 }
@@ -19,6 +20,8 @@ const styles: Record<BadgeProps['status'], string> = {
     'border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-900/80 dark:bg-amber-950/60 dark:text-amber-300',
   injecting:
     'border-purple-200 bg-purple-50 text-purple-700 dark:border-purple-900/80 dark:bg-purple-950/60 dark:text-purple-300',
+  uploading:
+    'border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-900/80 dark:bg-blue-950/60 dark:text-blue-300',
   completed:
     'border-green-200 bg-green-50 text-green-700 dark:border-green-900/80 dark:bg-green-950/60 dark:text-green-300',
   failed:
@@ -30,6 +33,7 @@ const dotStyles: Record<BadgeProps['status'], string> = {
   downloading: 'bg-blue-500 dark:bg-blue-400',
   paused: 'bg-amber-500 dark:bg-amber-400',
   injecting: 'bg-purple-500 dark:bg-purple-400',
+  uploading: 'bg-blue-500 dark:bg-blue-400',
   completed: 'bg-green-500 dark:bg-green-400',
   failed: 'bg-red-500 dark:bg-red-400',
 };

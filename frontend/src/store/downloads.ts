@@ -39,7 +39,8 @@ export const useDownloadsStore = create<DownloadsState>((set, get) => ({
         (t) =>
           t.status === "downloading" ||
           t.status === "pending" ||
-          t.status === "injecting",
+          t.status === "injecting" ||
+          t.status === "uploading",
       );
       if (hasActive && !pollInterval) {
         pollInterval = setInterval(() => {

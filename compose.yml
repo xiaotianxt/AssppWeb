@@ -9,7 +9,17 @@ services:
       - DATA_DIR=/data
       - PORT=8080
       # - DOWNLOAD_THREADS=8
-      # - ACCESS_PASSWORD=your_password_here
+      - ACCESS_PASSWORD=${ACCESS_PASSWORD:-}
+      # Optional private R2 storage (requires an image built with R2 support).
+      - R2_BUCKET=${R2_BUCKET:-}
+      - R2_ACCOUNT_ID=${R2_ACCOUNT_ID:-}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID:-}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY:-}
+      - R2_MAX_STORAGE_MB=${R2_MAX_STORAGE_MB:-3072}
+      - PUBLIC_BASE_URL=${PUBLIC_BASE_URL:-}
+      # With R2: default max file 2048 MB, one active download; both must be > 0.
+      # - MAX_DOWNLOAD_MB=2048
+      # - MAX_ACTIVE_DOWNLOADS=1
     restart: unless-stopped
     logging:
       driver: "json-file"

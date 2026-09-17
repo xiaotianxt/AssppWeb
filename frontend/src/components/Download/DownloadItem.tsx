@@ -24,8 +24,9 @@ export default function DownloadItem({
 }: DownloadItemProps) {
   const { t } = useTranslation();
 
-  const isActive = task.status === 'downloading' || task.status === 'injecting';
-  const isPaused = task.status === 'paused';
+  const isActive = ['downloading', 'injecting', 'uploading'].includes(task.status);
+  const isPaused = task.status === 'paused' || task.canResumeUpload;
+  const isBusy = task.status === 'injecting' || task.status === 'uploading';
   const detailsHref = `/downloads/${task.id}${
     preview ? '?preview=downloads' : ''
   }`;
@@ -106,7 +107,7 @@ export default function DownloadItem({
       )}
 
       <div className="mt-3 grid min-w-0 grid-cols-2 gap-2">
-        {isActive ? (
+        {task.status === 'downloading' ? (
           <button
             type="button"
             onClick={() => onPause(task.id)}
@@ -120,7 +121,7 @@ export default function DownloadItem({
             onClick={() => onResume(task.id)}
             className="min-h-10 min-w-0 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-950"
           >
-            {t('downloads.package.resume')}
+            {t(task.canResumeUpload ? 'downloads.package.retryUpload' : 'downloads.package.resume')}
           </button>
         ) : (
           <Link
@@ -133,6 +134,7 @@ export default function DownloadItem({
         <button
           type="button"
           onClick={() => onDelete(task.id)}
+          disabled={isBusy}
           className="min-h-10 min-w-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
         >
           {t('downloads.package.delete')}

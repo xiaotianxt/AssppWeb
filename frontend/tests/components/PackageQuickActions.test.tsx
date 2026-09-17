@@ -26,9 +26,7 @@ const originalRevokeObjectURL = Object.getOwnPropertyDescriptor(
   'revokeObjectURL',
 );
 
-function createTask(
-  overrides: Partial<DownloadTask> = {},
-): DownloadTask {
+function createTask(overrides: Partial<DownloadTask> = {}): DownloadTask {
   return {
     id: 'real-download-task',
     software: {
@@ -103,11 +101,11 @@ describe('PackageQuickActions', () => {
   });
 
   it('does not show quick actions when a completed task has no file', () => {
-    render(
-      <PackageQuickActions task={createTask({ hasFile: false })} />,
-    );
+    render(<PackageQuickActions task={createTask({ hasFile: false })} />);
 
-    expect(screen.queryByTestId('package-quick-actions')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('package-quick-actions'),
+    ).not.toBeInTheDocument();
   });
 
   it.each<DownloadTask['status']>([
@@ -115,11 +113,14 @@ describe('PackageQuickActions', () => {
     'downloading',
     'paused',
     'injecting',
+    'uploading',
     'failed',
   ])('does not show quick actions for a %s task', (status) => {
     render(<PackageQuickActions task={createTask({ status })} />);
 
-    expect(screen.queryByTestId('package-quick-actions')).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId('package-quick-actions'),
+    ).not.toBeInTheDocument();
   });
 
   it('keeps all preview actions local and shows a notice for each click', async () => {
@@ -161,6 +162,52 @@ describe('PackageQuickActions', () => {
         }),
       ]),
     );
+  });
+
+  it('uses authenticated link APIs for R2, but navigates to the signed object without forwarding credentials', async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem('auth-token', 'test-access-token');
+    const signed =
+      'https://test.r2.cloudflarestorage.com/bucket/file?signature=test';
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async (url) =>
+        ({
+          ok: true,
+          json: async () =>
+            String(url).includes('/install/')
+              ? {
+                  installUrl:
+                    'itms-services://?action=download-manifest&url=signed',
+                  manifestUrl: 'https://example.test/manifest?token=test',
+                }
+              : { url: signed },
+        }) as Response,
+    );
+    let clicked: string | undefined;
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      clicked = this.href;
+    });
+    render(<PackageQuickActions task={createTask({ storage: 'r2' })} />);
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'downloads.package.share' }),
+      ).toBeEnabled(),
+    );
+    await user.click(
+      screen.getByRole('button', { name: 'downloads.package.downloadIpa' }),
+    );
+    await waitFor(() => expect(clicked).toBe(signed));
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/packages/real-download-task/link?accountHash=account-hash-123',
+      {
+        headers: { 'X-Access-Token': 'test-access-token' },
+      },
+    );
+    expect(
+      fetchSpy.mock.calls.every(([url]) => String(url).startsWith('/api/')),
+    ).toBe(true);
   });
 
   it('downloads a real package through the authenticated API as a blob', async () => {

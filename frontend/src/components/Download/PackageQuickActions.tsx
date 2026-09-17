@@ -1,10 +1,11 @@
-import { type MouseEvent } from 'react';
+import { useEffect, useState, type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import { QRCodeSVG } from 'qrcode.react';
 import { isPreviewDownloadTask } from './previewTasks';
 import { useToastStore } from '../../store/toast';
-import { authHeaders } from '../../api/client';
-import { getInstallInfo } from '../../api/install';
+import { useDownloadsStore } from '../../store/downloads';
+import { apiPost, authHeaders } from '../../api/client';
+import { getInstallInfo, type InstallInfo } from '../../api/install';
 import type { DownloadTask } from '../../types';
 
 interface PackageQuickActionsProps {
@@ -21,14 +22,63 @@ export default function PackageQuickActions({
   const { t } = useTranslation();
   const addToast = useToastStore((state) => state.addToast);
 
+  const [remoteInstall, setRemoteInstall] = useState<
+    (InstallInfo & { taskId: string }) | null
+  >(null);
+  const [linkError, setLinkError] = useState(false);
+  const [archiving, setArchiving] = useState(false);
+
+  useEffect(() => {
+    if (task.storage !== 'r2' || task.status !== 'completed') return;
+    let active = true;
+    const refresh = async () => {
+      try {
+        const params = new URLSearchParams({ accountHash: task.accountHash });
+        const response = await fetch(`/api/install/${task.id}/url?${params}`, {
+          headers: authHeaders(),
+        });
+        if (!response.ok) throw new Error('Install link failed');
+        const info = (await response.json()) as InstallInfo;
+        if (active) {
+          setRemoteInstall({ ...info, taskId: task.id });
+          setLinkError(false);
+        }
+      } catch {
+        if (active) {
+          setRemoteInstall(null);
+          setLinkError(true);
+        }
+      }
+    };
+    void refresh();
+    const timer = setInterval(
+      () => {
+        void refresh();
+      },
+      10 * 60 * 1000,
+    );
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      active = false;
+      clearInterval(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  }, [task.id, task.accountHash, task.storage, task.status]);
+
   if (task.status !== 'completed' || !task.hasFile) return null;
 
-  const installInfo = getInstallInfo(task.id);
+  const installInfo =
+    task.storage === 'r2'
+      ? remoteInstall?.taskId === task.id
+        ? remoteInstall
+        : null
+      : getInstallInfo(task.id);
   const isPreview = isPreviewDownloadTask(task);
   const buttonSize =
-    size === 'compact'
-      ? 'min-h-10 px-2 text-xs'
-      : 'min-h-11 px-3 text-sm';
+    size === 'compact' ? 'min-h-10 px-2 text-xs' : 'min-h-11 px-3 text-sm';
   const secondaryButton = `${buttonSize} inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg border border-gray-300 bg-white font-medium text-gray-700 transition-colors hover:border-gray-400 hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-gray-600 dark:hover:bg-gray-800`;
 
   function showPreviewNotice() {
@@ -46,11 +96,11 @@ export default function PackageQuickActions({
       return;
     }
 
-    addToast(
-      task.software.name,
-      'info',
-      t('toast.title.installStarted'),
-    );
+    if (!installInfo) {
+      event.preventDefault();
+      return;
+    }
+    addToast(task.software.name, 'info', t('toast.title.installStarted'));
   }
 
   async function handleShare() {
@@ -60,6 +110,7 @@ export default function PackageQuickActions({
     }
 
     try {
+      if (!installInfo) throw new Error('Install link unavailable');
       await copyText(installInfo.installUrl);
       addToast(
         t('downloads.package.copied'),
@@ -89,14 +140,26 @@ export default function PackageQuickActions({
       return;
     }
 
-    addToast(
-      task.software.name,
-      'info',
-      t('toast.title.downloadIpaStarted'),
-    );
+    addToast(task.software.name, 'info', t('toast.title.downloadIpaStarted'));
 
     try {
       const params = new URLSearchParams({ accountHash: task.accountHash });
+      if (task.storage === 'r2') {
+        const link = await fetch(`/api/packages/${task.id}/link?${params}`, {
+          headers: authHeaders(),
+        });
+        if (!link.ok) throw new Error('Download link failed');
+        const { url } = await link.json();
+        if (typeof url !== 'string' || new URL(url).protocol !== 'https:')
+          throw new Error('Invalid download link');
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.referrerPolicy = 'no-referrer';
+        document.body.appendChild(anchor);
+        anchor.click();
+        anchor.remove();
+        return;
+      }
       const response = await fetch(`/api/packages/${task.id}/file?${params}`, {
         headers: authHeaders(),
       });
@@ -120,64 +183,112 @@ export default function PackageQuickActions({
     }
   }
 
-  return (
-    <div
-      className="grid min-w-0 grid-cols-3 gap-2"
-      aria-label={t('downloads.package.quickActions')}
-      data-testid="package-quick-actions"
-    >
-      <a
-        href={installInfo.installUrl}
-        onClick={handleInstall}
-        className={`${buttonSize} inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg bg-blue-600 font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900`}
-        aria-label={t('downloads.package.install')}
-      >
-        <InstallIcon />
-        <span className="truncate">{t('downloads.package.installShort')}</span>
-      </a>
+  async function handleArchive() {
+    setArchiving(true);
+    try {
+      await apiPost(`/packages/${task.id}/archive`, {
+        accountHash: task.accountHash,
+      });
+      await useDownloadsStore.getState().fetchTasks();
+    } catch {
+      addToast(t('downloads.package.archiveFailed'), 'error');
+    } finally {
+      setArchiving(false);
+    }
+  }
 
-      <div className="group relative min-w-0">
+  return (
+    <>
+      <div
+        className="grid min-w-0 grid-cols-3 gap-2"
+        aria-label={t('downloads.package.quickActions')}
+        data-testid="package-quick-actions"
+      >
+        <a
+          href={installInfo?.installUrl}
+          aria-disabled={!installInfo}
+          onClick={handleInstall}
+          className={`${buttonSize} inline-flex min-w-0 items-center justify-center gap-1.5 rounded-lg bg-blue-600 font-medium text-white transition-colors hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/60 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-gray-900`}
+          aria-label={t('downloads.package.install')}
+        >
+          <InstallIcon />
+          <span className="truncate">
+            {t('downloads.package.installShort')}
+          </span>
+        </a>
+
+        <div className="group relative min-w-0">
+          <button
+            type="button"
+            onClick={handleShare}
+            disabled={!installInfo}
+            aria-describedby={isPreview ? undefined : `install-qr-${task.id}`}
+            className={`${secondaryButton} w-full`}
+            aria-label={t('downloads.package.share')}
+          >
+            <ShareIcon />
+            <span className="truncate">{t('downloads.package.share')}</span>
+          </button>
+          {!isPreview && installInfo && (
+            <div
+              id={`install-qr-${task.id}`}
+              role="tooltip"
+              className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 opacity-0 transition-opacity duration-200 md:invisible md:block md:group-hover:visible md:group-hover:opacity-100 md:group-focus-within:visible md:group-focus-within:opacity-100"
+            >
+              <div className="flex flex-col items-center rounded-lg border border-gray-200 bg-white p-2 text-gray-500 shadow-xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
+                <QRCodeSVG
+                  value={installInfo.installUrl}
+                  size={128}
+                  className="mb-1 rounded bg-white p-1"
+                />
+                <span className="mt-1 whitespace-nowrap text-xs">
+                  {t('downloads.package.scan')}
+                </span>
+                <span className="absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900" />
+              </div>
+            </div>
+          )}
+        </div>
+
         <button
           type="button"
-          onClick={handleShare}
-          aria-describedby={isPreview ? undefined : `install-qr-${task.id}`}
-          className={`${secondaryButton} w-full`}
-          aria-label={t('downloads.package.share')}
+          onClick={handleDownload}
+          className={secondaryButton}
+          aria-label={t('downloads.package.downloadIpa')}
         >
-          <ShareIcon />
-          <span className="truncate">{t('downloads.package.share')}</span>
+          <DownloadIcon />
+          <span className="truncate">
+            {t('downloads.package.downloadShort')}
+          </span>
         </button>
-        {!isPreview && (
-          <div
-            id={`install-qr-${task.id}`}
-            role="tooltip"
-            className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 hidden -translate-x-1/2 opacity-0 transition-opacity duration-200 md:invisible md:block md:group-hover:visible md:group-hover:opacity-100 md:group-focus-within:visible md:group-focus-within:opacity-100"
-          >
-            <div className="flex flex-col items-center rounded-lg border border-gray-200 bg-white p-2 text-gray-500 shadow-xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-400">
-              <QRCodeSVG
-                value={installInfo.installUrl}
-                size={128}
-                className="mb-1 rounded bg-white p-1"
-              />
-              <span className="mt-1 whitespace-nowrap text-xs">
-                {t('downloads.package.scan')}
-              </span>
-              <span className="absolute -bottom-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rotate-45 border-b border-r border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-900" />
-            </div>
-          </div>
-        )}
       </div>
-
-      <button
-        type="button"
-        onClick={handleDownload}
-        className={secondaryButton}
-        aria-label={t('downloads.package.downloadIpa')}
-      >
-        <DownloadIcon />
-        <span className="truncate">{t('downloads.package.downloadShort')}</span>
-      </button>
-    </div>
+      {task.storage === 'r2' && (
+        <p
+          className="mt-2 text-xs text-gray-600 dark:text-gray-400"
+          role={linkError ? 'alert' : undefined}
+        >
+          {t(
+            linkError
+              ? 'downloads.package.installLinkFailed'
+              : 'downloads.package.r2Links',
+          )}
+        </p>
+      )}
+      {task.canArchive && (
+        <button
+          type="button"
+          onClick={handleArchive}
+          disabled={archiving}
+          className="mt-2 rounded-lg border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-300 dark:hover:bg-gray-800"
+        >
+          {t(
+            archiving
+              ? 'downloads.status.uploading'
+              : 'downloads.package.archive',
+          )}
+        </button>
+      )}
+    </>
   );
 }
 

@@ -24,6 +24,13 @@ export interface Sinf {
   sinf: string; // base64 encoded
 }
 
+export interface RemotePackage {
+  bucket: string;
+  key: string;
+  size: number;
+  etag: string;
+}
+
 export interface DownloadTask {
   id: string;
   software: Software;
@@ -36,12 +43,18 @@ export interface DownloadTask {
     | "downloading"
     | "paused"
     | "injecting"
+    | "uploading"
     | "completed"
     | "failed";
   progress: number;
   speed: string;
   error?: string;
   filePath?: string;
+  /** Set only after signing finished. Allows upload-only recovery after restart. */
+  compiled?: boolean;
+  remote?: RemotePackage;
+  /** Recorded before uploading so even an unverified remote object can be deleted. */
+  uploadTarget?: Pick<RemotePackage, 'bucket' | 'key'>;
   createdAt: string;
 }
 

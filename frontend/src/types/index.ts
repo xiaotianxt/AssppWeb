@@ -70,12 +70,16 @@ export interface DownloadTask {
     | "downloading"
     | "paused"
     | "injecting"
+    | "uploading"
     | "completed"
     | "failed";
   progress: number;
   speed: string;
   error?: string;
   hasFile?: boolean;
+  storage?: 'local' | 'r2';
+  canResumeUpload?: boolean;
+  canArchive?: boolean;
   createdAt: string;
 }
 

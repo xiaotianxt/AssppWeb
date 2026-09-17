@@ -4,7 +4,13 @@ import { v4 as uuidv4 } from "uuid";
 import { config, DOWNLOAD_TIMEOUT_MS } from "../config.js";
 import { inject } from "./sinfInjector.js";
 import { ChunkedDownloader } from "./chunkedDownloader.js";
+import { r2Storage, R2StorageError } from "./r2Storage.js";
+import { hasPackage, localPackagePath } from "./packageFiles.js";
 import type { DownloadTask, Software, Sinf } from "../types/index.js";
+
+const deletingTasks = new Set<string>();
+
+export class DownloadCapacityError extends Error {}
 
 const tasks = new Map<string, DownloadTask>();
 const abortControllers = new Map<string, AbortController>();
@@ -60,23 +66,49 @@ export function validateDownloadURL(url: string): void {
 }
 
 // --- Security: sanitize task for API responses ---
-export function sanitizeTaskForResponse(
-  task: DownloadTask,
-): Omit<
+export function sanitizeTaskForResponse(task: DownloadTask): Omit<
   DownloadTask,
-  "downloadURL" | "sinfs" | "iTunesMetadata" | "filePath"
-> & { hasFile?: boolean } {
-  const { downloadURL, sinfs, iTunesMetadata, filePath, ...safe } = task;
+  | "downloadURL"
+  | "sinfs"
+  | "iTunesMetadata"
+  | "filePath"
+  | "remote"
+  | "uploadTarget"
+  | "compiled"
+> & {
+  hasFile: boolean;
+  storage: "local" | "r2";
+  canResumeUpload: boolean;
+  canArchive: boolean;
+} {
+  const {
+    downloadURL,
+    sinfs,
+    iTunesMetadata,
+    filePath,
+    remote,
+    uploadTarget,
+    compiled,
+    ...safe
+  } = task;
   return {
     ...safe,
-    hasFile: !!filePath && fs.existsSync(filePath),
+    hasFile: task.status === "completed" && hasPackage(task),
+    storage: remote ? "r2" : "local",
+    canResumeUpload:
+      !!r2Storage && !!compiled && !remote && task.status === "failed" &&
+      !!filePath && fs.existsSync(filePath),
+    canArchive: !!r2Storage && !remote && task.status === "completed",
   };
 }
 
-// --- Persistence: save only completed task metadata (no secrets) ---
+// Persist compiled files, including upload failures, without Apple credentials.
 function persistTasks() {
   const completed = Array.from(tasks.values())
-    .filter((t) => t.status === "completed" && t.filePath)
+    .filter(
+      (t) =>
+        (t.status === "completed" || t.compiled) && (t.filePath || t.remote || t.uploadTarget),
+    )
     .map((t) => ({
       id: t.id,
       software: t.software,
@@ -87,13 +119,32 @@ function persistTasks() {
       progress: t.progress,
       speed: t.speed,
       filePath: t.filePath,
+      compiled: t.compiled,
+      remote: t.remote,
+      uploadTarget: t.uploadTarget,
+      error: t.error,
       createdAt: t.createdAt,
     }));
-  fs.writeFileSync(TASKS_FILE, JSON.stringify(completed, null, 2));
+  // Never expose a partially written manifest to restart/orphan cleanup.
+  const temporary = `${TASKS_FILE}.tmp`;
+  const fd = fs.openSync(temporary, "w", 0o600);
+  try {
+    fs.writeFileSync(fd, JSON.stringify(completed, null, 2));
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+  fs.renameSync(temporary, TASKS_FILE);
+  const directory = fs.openSync(config.dataDir, "r");
+  try {
+    fs.fsyncSync(directory);
+  } finally {
+    fs.closeSync(directory);
+  }
 }
 
 // Auto-cleanup: delete completed files older than configured days
-export function runTimeCleanup() {
+export async function runTimeCleanup() {
   const { autoCleanupDays } = config;
   if (autoCleanupDays <= 0) return;
   const cutoff = Date.now() - autoCleanupDays * 24 * 60 * 60 * 1000;
@@ -119,12 +170,12 @@ export function runTimeCleanup() {
 
   for (const id of expiredIds) {
     console.log(`[Cleanup] Deleting expired task: ${id}`);
-    deleteTask(id);
+    await deleteTask(id);
   }
 }
 
 // Auto-cleanup: evict oldest completed files when total size exceeds limit
-export function runSpaceCleanup() {
+export async function runSpaceCleanup() {
   const { autoCleanupMaxMB } = config;
   if (autoCleanupMaxMB <= 0) return;
   const maxBytes = autoCleanupMaxMB * 1024 * 1024;
@@ -153,7 +204,7 @@ export function runSpaceCleanup() {
   fileTasks.sort((a, b) => a.mtimeMs - b.mtimeMs);
   for (const ft of fileTasks) {
     console.log(`[Cleanup] Space limit exceeded, deleting task: ${ft.id}`);
-    deleteTask(ft.id);
+    await deleteTask(ft.id);
     totalBytes -= ft.size;
     if (totalBytes <= maxBytes) break;
   }
@@ -174,12 +225,17 @@ function scheduleDailyCleanup() {
     return next.getTime() - now.getTime();
   }
 
-  function tick() {
-    runTimeCleanup();
-    setTimeout(tick, msUntilMidnight());
+  async function tick() {
+    try {
+      await runTimeCleanup();
+    } catch {
+      console.error("Scheduled package cleanup failed");
+    } finally {
+      setTimeout(tick, msUntilMidnight()).unref();
+    }
   }
 
-  setTimeout(tick, msUntilMidnight());
+  setTimeout(tick, msUntilMidnight()).unref();
 }
 
 function initOnStartup() {
@@ -195,14 +251,15 @@ function initOnStartup() {
   if (fs.existsSync(TASKS_FILE)) {
     try {
       const data = JSON.parse(fs.readFileSync(TASKS_FILE, "utf-8"));
+      if (!Array.isArray(data)) throw new Error("Invalid task manifest");
       if (Array.isArray(data)) {
         for (const item of data) {
-          // Only restore completed tasks whose IPA file still exists
+          // Remote objects have no local file. In-flight uploads recover as
+          // retryable failures, keeping their already-signed local IPA.
           if (
             item.id &&
-            item.status === "completed" &&
-            item.filePath &&
-            fs.existsSync(item.filePath)
+            (item.status === "completed" || item.compiled) &&
+            (hasPackage(item) || item.uploadTarget)
           ) {
             const task: DownloadTask = {
               id: item.id,
@@ -210,10 +267,20 @@ function initOnStartup() {
               accountHash: item.accountHash,
               downloadURL: "",
               sinfs: [],
-              status: "completed",
+              status:
+                item.remote || item.status === "completed"
+                  ? "completed"
+                  : "failed",
               progress: 100,
               speed: "0 B/s",
               filePath: item.filePath,
+              remote: item.remote,
+              uploadTarget: item.remote ? undefined : item.uploadTarget,
+              compiled: true,
+              error:
+                item.status === "uploading"
+                  ? "Upload interrupted; resume to retry the local IPA"
+                  : item.error,
               createdAt: item.createdAt,
             };
             tasks.set(task.id, task);
@@ -221,15 +288,23 @@ function initOnStartup() {
         }
       }
     } catch {
-      // Corrupted file — start fresh
+      // A bad manifest must never cause the only copies of IPAs to be deleted.
+      throw new Error(
+        "Cannot load tasks.json; package files were left untouched",
+      );
     }
   }
 
-  // Clean up orphaned IPA files (files without a task)
+  // Only a durably recorded, verified remote copy permits local deletion.
+  for (const task of tasks.values()) {
+    if (task.remote && task.filePath) releaseLocalCopy(task);
+  }
   cleanOrphanedPackages();
 
   // Run time-based cleanup once on startup, then schedule daily
-  runTimeCleanup();
+  void runTimeCleanup().catch(() =>
+    console.error("Startup package cleanup failed"),
+  );
   scheduleDailyCleanup();
 }
 
@@ -254,8 +329,13 @@ function cleanOrphanedPackages() {
         if (fs.readdirSync(fullPath).length === 0) {
           fs.rmdirSync(fullPath);
         }
-      } else if (entry.isFile() && !knownPaths.has(path.resolve(fullPath))) {
-        // Orphaned file or leftover .part temp file — remove
+      } else if (
+        entry.isFile() &&
+        !knownPaths.has(path.resolve(fullPath)) &&
+        /\.part\d+$/.test(entry.name)
+      ) {
+        // A full IPA may be the only copy after a manifest write failure.
+        // Only incomplete chunks are safe to remove without a task record.
         fs.unlinkSync(fullPath);
       }
     }
@@ -309,50 +389,70 @@ export function getTask(id: string): DownloadTask | undefined {
   return tasks.get(id);
 }
 
-export function deleteTask(id: string): boolean {
+export async function deleteTask(id: string): Promise<boolean> {
   const task = tasks.get(id);
   if (!task) return false;
-
-  // Abort if downloading
-  const controller = abortControllers.get(id);
-  if (controller) {
-    controller.abort();
-    abortControllers.delete(id);
+  if (
+    task.status === "uploading" ||
+    task.status === "injecting" ||
+    deletingTasks.has(id)
+  ) {
+    throw new Error(
+      "Package is busy; wait for the current operation to finish",
+    );
   }
-  const downloader = chunkDownloaders.get(id);
-  if (downloader) {
-    downloader.abort();
-    chunkDownloaders.delete(id);
-  }
+  deletingTasks.add(id);
+  try {
+    // Keep the task and its object key when remote deletion fails so it is retryable.
+    const object = task.remote ?? task.uploadTarget;
+    if (object) {
+      if (!r2Storage) throw new Error("R2 is not configured");
+      await r2Storage.delete(object);
+    }
 
-  // Remove file if exists, with path safety check
-  if (task.filePath) {
-    const resolved = path.resolve(task.filePath);
-    const packagesBase = path.resolve(PACKAGES_DIR);
-    if (
-      resolved.startsWith(packagesBase + path.sep) &&
-      fs.existsSync(resolved)
-    ) {
-      fs.unlinkSync(resolved);
+    // Abort if downloading
+    const controller = abortControllers.get(id);
+    if (controller) {
+      controller.abort();
+      abortControllers.delete(id);
+    }
+    const downloader = chunkDownloaders.get(id);
+    if (downloader) {
+      downloader.abort();
+      chunkDownloaders.delete(id);
+    }
 
-      // Clean up empty parent directories
-      let dir = path.dirname(resolved);
-      while (dir !== packagesBase && dir.startsWith(packagesBase)) {
-        const contents = fs.readdirSync(dir);
-        if (contents.length === 0) {
-          fs.rmdirSync(dir);
-          dir = path.dirname(dir);
-        } else {
-          break;
+    // Remove file if exists, with path safety check
+    if (task.filePath) {
+      const resolved = path.resolve(task.filePath);
+      const packagesBase = path.resolve(PACKAGES_DIR);
+      if (
+        resolved.startsWith(packagesBase + path.sep) &&
+        fs.existsSync(resolved)
+      ) {
+        fs.unlinkSync(resolved);
+
+        // Clean up empty parent directories
+        let dir = path.dirname(resolved);
+        while (dir !== packagesBase && dir.startsWith(packagesBase)) {
+          const contents = fs.readdirSync(dir);
+          if (contents.length === 0) {
+            fs.rmdirSync(dir);
+            dir = path.dirname(dir);
+          } else {
+            break;
+          }
         }
       }
     }
-  }
 
-  tasks.delete(id);
-  progressListeners.delete(id);
-  persistTasks();
-  return true;
+    tasks.delete(id);
+    progressListeners.delete(id);
+    persistTasks();
+    return true;
+  } finally {
+    deletingTasks.delete(id);
+  }
 }
 
 export function pauseTask(id: string): boolean {
@@ -377,9 +477,14 @@ export function pauseTask(id: string): boolean {
 
 export function resumeTask(id: string): boolean {
   const task = tasks.get(id);
-  if (!task || task.status !== "paused") return false;
-
-  startDownload(task);
+  if (!task || deletingTasks.has(id)) return false;
+  if (task.compiled && task.status === "failed" && r2Storage && !task.remote) {
+    void archiveTask(task);
+    return true;
+  }
+  if (task.status !== "paused") return false;
+  assertDownloadCapacity();
+  void startDownload(task);
   return true;
 }
 
@@ -390,6 +495,7 @@ export function createTask(
   sinfs: Sinf[],
   iTunesMetadata?: string,
 ): DownloadTask {
+  assertDownloadCapacity();
   // Validate download URL
   validateDownloadURL(downloadURL);
 
@@ -412,14 +518,113 @@ export function createTask(
   };
 
   tasks.set(task.id, task);
-  startDownload(task);
+  void startDownload(task);
   return task;
 }
 
+function assertDownloadCapacity() {
+  if (config.maxActiveDownloads <= 0) return;
+  const active = getAllTasks().filter((t) =>
+    ["pending", "downloading", "injecting", "uploading"].includes(t.status),
+  );
+  if (active.length >= config.maxActiveDownloads)
+    throw new DownloadCapacityError(
+      "Maximum concurrent downloads reached; wait for an active task to finish",
+    );
+}
+
+/** Explicit migration of an existing local package; never happens on startup. */
+export function archivePackage(id: string): boolean {
+  const task = tasks.get(id);
+  if (
+    !r2Storage ||
+    !task ||
+    task.status !== "completed" ||
+    task.remote ||
+    deletingTasks.has(id)
+  )
+    return false;
+  task.compiled = true;
+  void archiveTask(task);
+  return true;
+}
+
+async function archiveTask(task: DownloadTask) {
+  const local = localPackagePath(task);
+  if (!r2Storage || !local) return;
+  task.status = "uploading";
+  task.error = undefined;
+  task.speed = "0 B/s";
+  try {
+    const target = r2Storage.target(task.id);
+    if (task.uploadTarget && task.uploadTarget.bucket !== target.bucket) {
+      throw new R2StorageError(
+        "Restore the original R2 bucket before retrying this upload",
+      );
+    }
+    task.uploadTarget = target;
+    // Save BEFORE any network calls: restart must retain this compiled file
+    // and deletion must cover objects whose completion response was lost.
+    persistTasks();
+    notifyProgress(task);
+    const remote = await r2Storage.upload(local, task.id);
+    task.remote = remote;
+    task.status = "completed";
+    try {
+      persistTasks();
+    } catch (error) {
+      task.filePath = local;
+      task.remote = undefined;
+      throw error;
+    }
+    // The verified remote key and local cleanup path are durable now.
+    task.uploadTarget = undefined;
+    releaseLocalCopy(task);
+  } catch (error) {
+    console.error(
+      `R2 upload failed for package ${task.id}: ${error instanceof Error ? error.name : "UnknownError"}`,
+    );
+    task.status = "failed";
+    task.error =
+      error instanceof R2StorageError
+        ? error.message
+        : "R2 upload failed; local IPA retained. Check storage credentials/connectivity and resume to retry.";
+    try {
+      persistTasks();
+    } catch {
+      console.error(
+        `Cannot persist upload recovery for package ${task.id}; local IPA retained`,
+      );
+    }
+  }
+  notifyProgress(task);
+}
+
+function releaseLocalCopy(task: DownloadTask) {
+  const local = localPackagePath(task);
+  if (!task.remote || !local) return;
+  try {
+    fs.rmSync(local, { force: true });
+    task.filePath = undefined;
+  } catch {
+    task.error = "Uploaded to R2, but local file cleanup failed";
+    console.error(`Local cleanup failed for uploaded package ${task.id}`);
+  }
+}
+
 async function startDownload(task: DownloadTask) {
-  // Pre-download cleanup: expire old files + enforce space limit
-  runTimeCleanup();
-  runSpaceCleanup();
+  // Claim the slot synchronously, before any await.
+  task.status = "downloading";
+  try {
+    await runTimeCleanup();
+    await runSpaceCleanup();
+  } catch {
+    task.status = "failed";
+    task.error = "Package cleanup failed";
+    notifyProgress(task);
+    return;
+  }
+  if (!tasks.has(task.id)) return;
 
   const controller = new AbortController();
   abortControllers.set(task.id, controller);
@@ -477,6 +682,7 @@ async function startDownload(task: DownloadTask) {
     chunkDownloaders.set(task.id, downloader);
 
     await downloader.download(controller.signal);
+    if (!tasks.has(task.id)) return;
 
     chunkDownloaders.delete(task.id);
     abortControllers.delete(task.id);
@@ -491,6 +697,7 @@ async function startDownload(task: DownloadTask) {
       await inject(task.sinfs, filePath, task.iTunesMetadata);
     }
 
+    task.compiled = true;
     task.status = "completed";
     task.progress = 100;
 
@@ -499,9 +706,10 @@ async function startDownload(task: DownloadTask) {
     task.sinfs = [];
     task.iTunesMetadata = undefined;
 
-    // Persist completed task metadata (no secrets)
+    // Persist the local compiled file before attempting remote storage.
     persistTasks();
-    notifyProgress(task);
+    if (r2Storage) await archiveTask(task);
+    else notifyProgress(task);
   } catch (err) {
     chunkDownloaders.delete(task.id);
     abortControllers.delete(task.id);

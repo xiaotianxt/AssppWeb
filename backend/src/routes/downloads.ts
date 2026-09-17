@@ -2,6 +2,7 @@ import { Router, Request, Response } from "express";
 import { config } from "../config.js";
 import {
   createTask,
+  DownloadCapacityError,
   getAllTasks,
   getTask,
   deleteTask,
@@ -13,6 +14,7 @@ import {
   validateDownloadURL,
 } from "../services/downloadManager.js";
 import {
+  asyncRoute,
   getIdParam,
   requireAccountHash,
   verifyTaskOwnership,
@@ -135,6 +137,10 @@ router.post("/downloads", async (req: Request, res: Response) => {
     );
     res.status(201).json(sanitizeTaskForResponse(task));
   } catch (err) {
+    if (err instanceof DownloadCapacityError) {
+      res.status(409).json({ error: err.message });
+      return;
+    }
     console.error(
       "Create download error:",
       err instanceof Error ? err.message : err,
@@ -251,35 +257,49 @@ router.post("/downloads/:id/resume", (req: Request, res: Response) => {
 
   if (!verifyTaskOwnership(task, accountHash, res)) return;
 
-  const success = resumeTask(id);
-  if (!success) {
-    res.status(400).json({ error: "Cannot resume this download" });
-    return;
+  try {
+    if (!resumeTask(id)) {
+      res.status(400).json({ error: "Cannot resume this download" });
+      return;
+    }
+  } catch (error) {
+    if (error instanceof DownloadCapacityError) {
+      res.status(409).json({ error: error.message });
+      return;
+    }
+    throw error;
   }
   const updated = getTask(id);
   res.json(updated ? sanitizeTaskForResponse(updated) : { success: true });
 });
 
 // Delete download (requires accountHash)
-router.delete("/downloads/:id", (req: Request, res: Response) => {
-  const accountHash = requireAccountHash(req, res);
-  if (!accountHash) return;
+router.delete(
+  "/downloads/:id",
+  asyncRoute(async (req: Request, res: Response) => {
+    const accountHash = requireAccountHash(req, res);
+    if (!accountHash) return;
 
-  const id = getIdParam(req);
-  const task = getTask(id);
-  if (!task) {
-    res.status(404).json({ error: "Download not found" });
-    return;
-  }
+    const id = getIdParam(req);
+    const task = getTask(id);
+    if (!task) {
+      res.status(404).json({ error: "Download not found" });
+      return;
+    }
 
-  if (!verifyTaskOwnership(task, accountHash, res)) return;
+    if (!verifyTaskOwnership(task, accountHash, res)) return;
 
-  const success = deleteTask(id);
-  if (!success) {
-    res.status(404).json({ error: "Download not found" });
-    return;
-  }
-  res.json({ success: true });
-});
+    if (task.status === "injecting" || task.status === "uploading") {
+      res.status(409).json({ error: "Package is busy" });
+      return;
+    }
+    const success = await deleteTask(id);
+    if (!success) {
+      res.status(404).json({ error: "Download not found" });
+      return;
+    }
+    res.json({ success: true });
+  }),
+);
 
 export default router;

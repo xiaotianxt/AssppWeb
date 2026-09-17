@@ -55,8 +55,8 @@ export default function PackageDetail() {
     );
   }
 
-  const isActive = task.status === 'downloading' || task.status === 'injecting';
-  const isPaused = task.status === 'paused';
+  const isActive = ['downloading', 'injecting', 'uploading'].includes(task.status);
+  const isPaused = task.status === 'paused' || task.canResumeUpload;
   const isCompleted = task.status === 'completed';
   const isPreview = isPreviewDownloadTask(task);
   const accountEmail = isPreview
@@ -327,7 +327,7 @@ export default function PackageDetail() {
                   : t('downloads.package.checkUpdate')}
               </button>
             )}
-            {isActive && (
+            {task.status === 'downloading' && (
               <button
                 type="button"
                 onClick={handlePause}
@@ -342,12 +342,13 @@ export default function PackageDetail() {
                 onClick={handleResume}
                 className="min-h-11 min-w-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
               >
-                {t('downloads.package.resume')}
+                {t(task.canResumeUpload ? 'downloads.package.retryUpload' : 'downloads.package.resume')}
               </button>
             )}
             <button
               type="button"
               onClick={handleDelete}
+              disabled={task.status === 'injecting' || task.status === 'uploading'}
               className="min-h-11 min-w-0 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
             >
               {t('downloads.package.delete')}
