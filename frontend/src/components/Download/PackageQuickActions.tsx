@@ -186,7 +186,7 @@ export default function PackageQuickActions({
   async function handleArchive() {
     setArchiving(true);
     try {
-      await apiPost(`/packages/${task.id}/archive`, {
+      await apiPost(`/api/packages/${task.id}/archive`, {
         accountHash: task.accountHash,
       });
       await useDownloadsStore.getState().fetchTasks();

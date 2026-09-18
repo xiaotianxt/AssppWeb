@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import PackageQuickActions from '../../src/components/Download/PackageQuickActions';
 import { previewDownloadTasks } from '../../src/components/Download/previewTasks';
 import { useToastStore } from '../../src/store/toast';
+import { useDownloadsStore } from '../../src/store/downloads';
 import type { DownloadTask } from '../../src/types';
 
 vi.mock('react-i18next', () => ({
@@ -208,6 +209,38 @@ describe('PackageQuickActions', () => {
     expect(
       fetchSpy.mock.calls.every(([url]) => String(url).startsWith('/api/')),
     ).toBe(true);
+  });
+
+  it('starts archival through the authenticated /api route and refreshes tasks', async () => {
+    const user = userEvent.setup();
+    sessionStorage.setItem('auth-token', 'test-access-token');
+    const refresh = vi
+      .spyOn(useDownloadsStore.getState(), 'fetchTasks')
+      .mockResolvedValue(undefined);
+    const fetchSpy = vi
+      .spyOn(globalThis, 'fetch')
+      .mockImplementation(
+        async (url) =>
+          new Response('{}', {
+            status: String(url).startsWith('/api/packages/') ? 202 : 404,
+          }),
+      );
+    render(<PackageQuickActions task={createTask({ canArchive: true })} />);
+    await user.click(
+      screen.getByRole('button', { name: 'downloads.package.archive' }),
+    );
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/packages/real-download-task/archive',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Access-Token': 'test-access-token',
+        },
+        body: JSON.stringify({ accountHash: 'account-hash-123' }),
+      },
+    );
+    await waitFor(() => expect(refresh).toHaveBeenCalledOnce());
   });
 
   it('downloads a real package through the authenticated API as a blob', async () => {
