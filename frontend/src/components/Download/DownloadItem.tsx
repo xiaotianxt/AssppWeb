@@ -1,9 +1,8 @@
 import { Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import AppIcon from '../common/AppIcon';
-import Badge from '../common/Badge';
-import ProgressBar from '../common/ProgressBar';
 import PackageQuickActions from './PackageQuickActions';
+import TaskProgress, { TaskStatusBadge } from './TaskProgress';
 import { formatBytes } from '../../utils/format';
 import type { DownloadTask } from '../../types';
 
@@ -24,7 +23,6 @@ export default function DownloadItem({
 }: DownloadItemProps) {
   const { t } = useTranslation();
 
-  const isActive = ['downloading', 'injecting', 'uploading'].includes(task.status);
   const isPaused = task.status === 'paused' || task.canResumeUpload;
   const isBusy = task.status === 'injecting' || task.status === 'uploading';
   const detailsHref = `/downloads/${task.id}${
@@ -53,7 +51,7 @@ export default function DownloadItem({
               </p>
             </div>
             <div className="shrink-0 whitespace-nowrap">
-              <Badge status={task.status} />
+              <TaskStatusBadge task={task} />
             </div>
           </div>
           <p
@@ -80,19 +78,7 @@ export default function DownloadItem({
         />
       </dl>
 
-      {(isActive || isPaused) && (
-        <div className="mt-3">
-          <ProgressBar progress={task.progress} label={task.software.name} />
-          <div className="mt-1.5 flex min-w-0 justify-between gap-3 text-xs font-medium text-gray-500 dark:text-gray-400">
-            <span>{Math.round(task.progress)}%</span>
-            {task.speed && isActive && (
-              <span className="max-w-[55%] truncate text-right">
-                {task.speed}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      <TaskProgress task={task} className="mt-3" />
 
       {task.error && (
         <p className="mt-3 break-words rounded-lg bg-red-50 p-2.5 text-xs font-medium text-red-700 dark:bg-red-950/40 dark:text-red-400">
@@ -121,7 +107,11 @@ export default function DownloadItem({
             onClick={() => onResume(task.id)}
             className="min-h-10 min-w-0 rounded-lg border border-blue-300 bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-950/60 dark:text-blue-300 dark:hover:bg-blue-950"
           >
-            {t(task.canResumeUpload ? 'downloads.package.retryUpload' : 'downloads.package.resume')}
+            {t(
+              task.canResumeUpload
+                ? 'downloads.package.retryUpload'
+                : 'downloads.package.resume',
+            )}
           </button>
         ) : (
           <Link
@@ -135,7 +125,7 @@ export default function DownloadItem({
           type="button"
           onClick={() => onDelete(task.id)}
           disabled={isBusy}
-          className="min-h-10 min-w-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+          className="min-h-10 min-w-0 rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
         >
           {t('downloads.package.delete')}
         </button>

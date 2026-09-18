@@ -12,7 +12,7 @@ import {
   UploadPartCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
-import type { RemotePackage } from '../types/index.js';
+import type { RemotePackage, UploadProgress } from '../types/index.js';
 
 export interface R2Config {
   accountId: string;
@@ -136,9 +136,19 @@ export class R2Storage {
     await this.client.send(new DeleteObjectCommand(this.objectParams(object)));
   }
 
-  upload(filePath: string, taskId: string): Promise<RemotePackage> {
+  upload(
+    filePath: string,
+    taskId: string,
+    onProgress?: (progress: UploadProgress) => void,
+  ): Promise<RemotePackage> {
+    onProgress?.({
+      phase: 'queued',
+      uploadedBytes: 0,
+      totalBytes: 0,
+      bytesPerSecond: 0,
+    });
     const result = this.uploadQueue.then(() =>
-      this.uploadFile(filePath, taskId),
+      this.uploadFile(filePath, taskId, onProgress),
     );
     this.uploadQueue = result.catch(() => undefined);
     return result;
@@ -147,10 +157,17 @@ export class R2Storage {
   private async uploadFile(
     filePath: string,
     taskId: string,
+    onProgress?: (progress: UploadProgress) => void,
   ): Promise<RemotePackage> {
     const { Bucket, Key } = this.objectParams(this.target(taskId));
     const size = (await stat(filePath)).size;
     if (size <= 0) throw new Error('Cannot upload an empty package');
+    onProgress?.({
+      phase: 'uploading',
+      uploadedBytes: 0,
+      totalBytes: size,
+      bytesPerSecond: 0,
+    });
 
     // Count stored objects, not only the current process's task records. A retry
     // replaces the same key, and must not count that object's size twice.
@@ -189,6 +206,7 @@ export class R2Storage {
       const file = await open(filePath, 'r');
       const parts: { PartNumber: number; ETag: string }[] = [];
       const composite = createHash('md5');
+      const started = performance.now();
       try {
         for (let offset = 0; offset < size; offset += PART_SIZE) {
           const body = Buffer.allocUnsafe(Math.min(PART_SIZE, size - offset));
@@ -224,6 +242,17 @@ export class R2Storage {
             );
           }
           parts.push({ PartNumber, ETag: part.ETag });
+          // Count a part only after R2 acknowledges it AND its checksum matches.
+          // Retries and time spent waiting in the upload queue never add bytes.
+          const uploadedBytes = offset + body.length;
+          onProgress?.({
+            phase: uploadedBytes === size ? 'verifying' : 'uploading',
+            uploadedBytes,
+            totalBytes: size,
+            bytesPerSecond:
+              uploadedBytes /
+              Math.max((performance.now() - started) / 1000, 0.001),
+          });
         }
       } finally {
         await file.close();

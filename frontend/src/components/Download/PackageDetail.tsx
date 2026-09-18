@@ -3,10 +3,9 @@ import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import PageContainer from '../Layout/PageContainer';
 import AppIcon from '../common/AppIcon';
-import Badge from '../common/Badge';
 import Modal from '../common/Modal';
-import ProgressBar from '../common/ProgressBar';
 import PackageQuickActions from './PackageQuickActions';
+import TaskProgress, { TaskStatusBadge } from './TaskProgress';
 import {
   isDownloadPreviewEnabled,
   isPreviewDownloadTask,
@@ -55,7 +54,6 @@ export default function PackageDetail() {
     );
   }
 
-  const isActive = ['downloading', 'injecting', 'uploading'].includes(task.status);
   const isPaused = task.status === 'paused' || task.canResumeUpload;
   const isCompleted = task.status === 'completed';
   const isPreview = isPreviewDownloadTask(task);
@@ -193,7 +191,7 @@ export default function PackageDetail() {
                 {task.software.artistName}
               </p>
               <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-                <Badge status={task.status} />
+                <TaskStatusBadge task={task} />
                 <span className="min-w-0 break-all text-sm text-gray-500 dark:text-gray-400">
                   v{task.software.version}
                 </span>
@@ -201,22 +199,10 @@ export default function PackageDetail() {
             </div>
           </div>
 
-          {(isActive || isPaused) && (
-            <div className="mt-4 min-w-0 border-t border-gray-100 pt-4 dark:border-gray-800">
-              <ProgressBar
-                progress={task.progress}
-                label={task.software.name}
-              />
-              <div className="mt-1.5 flex min-w-0 justify-between gap-3 text-sm text-gray-500 dark:text-gray-400">
-                <span>{Math.round(task.progress)}%</span>
-                {task.speed && isActive && (
-                  <span className="min-w-0 truncate text-right">
-                    {task.speed}
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
+          <TaskProgress
+            task={task}
+            className="mt-4 min-w-0 border-t border-gray-100 pt-4 dark:border-gray-800"
+          />
 
           {task.error && (
             <p
@@ -342,14 +328,20 @@ export default function PackageDetail() {
                 onClick={handleResume}
                 className="min-h-11 min-w-0 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-blue-700"
               >
-                {t(task.canResumeUpload ? 'downloads.package.retryUpload' : 'downloads.package.resume')}
+                {t(
+                  task.canResumeUpload
+                    ? 'downloads.package.retryUpload'
+                    : 'downloads.package.resume',
+                )}
               </button>
             )}
             <button
               type="button"
               onClick={handleDelete}
-              disabled={task.status === 'injecting' || task.status === 'uploading'}
-              className="min-h-11 min-w-0 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
+              disabled={
+                task.status === 'injecting' || task.status === 'uploading'
+              }
+              className="min-h-11 min-w-0 rounded-lg border border-red-300 px-3 py-2 text-sm font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950/40"
             >
               {t('downloads.package.delete')}
             </button>

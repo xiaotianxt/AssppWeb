@@ -96,8 +96,12 @@ export function sanitizeTaskForResponse(task: DownloadTask): Omit<
     hasFile: task.status === "completed" && hasPackage(task),
     storage: remote ? "r2" : "local",
     canResumeUpload:
-      !!r2Storage && !!compiled && !remote && task.status === "failed" &&
-      !!filePath && fs.existsSync(filePath),
+      !!r2Storage &&
+      !!compiled &&
+      !remote &&
+      task.status === "failed" &&
+      !!filePath &&
+      fs.existsSync(filePath),
     canArchive: !!r2Storage && !remote && task.status === "completed",
   };
 }
@@ -107,7 +111,8 @@ function persistTasks() {
   const completed = Array.from(tasks.values())
     .filter(
       (t) =>
-        (t.status === "completed" || t.compiled) && (t.filePath || t.remote || t.uploadTarget),
+        (t.status === "completed" || t.compiled) &&
+        (t.filePath || t.remote || t.uploadTarget),
     )
     .map((t) => ({
       id: t.id,
@@ -554,7 +559,14 @@ async function archiveTask(task: DownloadTask) {
   if (!r2Storage || !local) return;
   task.status = "uploading";
   task.error = undefined;
-  task.speed = "0 B/s";
+  task.progress = 0;
+  task.speed = "";
+  task.uploadProgress = {
+    phase: "queued",
+    uploadedBytes: 0,
+    totalBytes: 0,
+    bytesPerSecond: 0,
+  };
   try {
     const target = r2Storage.target(task.id);
     if (task.uploadTarget && task.uploadTarget.bucket !== target.bucket) {
@@ -567,9 +579,18 @@ async function archiveTask(task: DownloadTask) {
     // and deletion must cover objects whose completion response was lost.
     persistTasks();
     notifyProgress(task);
-    const remote = await r2Storage.upload(local, task.id);
+    const remote = await r2Storage.upload(local, task.id, (progress) => {
+      task.uploadProgress = progress;
+      task.progress =
+        progress.totalBytes > 0
+          ? Math.floor((progress.uploadedBytes / progress.totalBytes) * 100)
+          : 0;
+      notifyProgress(task);
+    });
     task.remote = remote;
     task.status = "completed";
+    task.progress = 100;
+    task.uploadProgress = undefined;
     try {
       persistTasks();
     } catch (error) {

@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 
 interface BadgeProps {
+  label?: string;
   status:
     | 'pending'
     | 'downloading'
@@ -38,7 +39,7 @@ const dotStyles: Record<BadgeProps['status'], string> = {
   failed: 'bg-red-500 dark:bg-red-400',
 };
 
-export default function Badge({ status }: BadgeProps) {
+export default function Badge({ status, label }: BadgeProps) {
   const { t } = useTranslation();
 
   return (
@@ -49,7 +50,7 @@ export default function Badge({ status }: BadgeProps) {
         aria-hidden="true"
         className={`h-1.5 w-1.5 rounded-full ${dotStyles[status]}`}
       />
-      {t(`downloads.status.${status}`)}
+      {label ?? t(`downloads.status.${status}`)}
     </span>
   );
 }

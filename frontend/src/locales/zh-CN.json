@@ -170,6 +170,14 @@
       "uploading": "上传至 R2",
       "injecting": "注入中"
     },
+    "upload": {
+      "queued": "等待上传至 R2",
+      "verifying": "校验上传结果",
+      "queuedHint": "正在排队，等待前一个文件上传完成。",
+      "preparingHint": "正在准备上传…",
+      "verifyingHint": "文件已传完，正在校验 R2 对象；校验成功后才释放本地文件…",
+      "measuringSpeed": "等待首个分片完成"
+    },
     "preview": {
       "badge": "预览",
       "description": "当前显示的是仅供界面预览的模拟安装包。",

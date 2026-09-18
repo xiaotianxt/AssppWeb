@@ -204,7 +204,7 @@ export default function DownloadList() {
       </div>
 
       <div
-        className="mb-5 grid grid-cols-2 gap-2 min-[360px]:grid-cols-3 sm:grid-cols-6"
+        className="mb-5 flex flex-wrap gap-2"
         role="group"
         aria-label={t("downloads.title")}
       >
@@ -212,6 +212,8 @@ export default function DownloadList() {
           [
             "all",
             "downloading",
+            "injecting",
+            "uploading",
             "pending",
             "paused",
             "completed",
@@ -221,7 +223,8 @@ export default function DownloadList() {
           <button
             key={status}
             onClick={() => setFilter(status)}
-            className={`flex h-9 w-full min-w-0 items-center justify-center rounded-full px-2.5 text-center text-[clamp(0.75rem,3.6vw,0.875rem)] font-semibold leading-tight transition-colors ${
+            aria-pressed={filter === status}
+            className={`flex h-9 min-w-0 items-center justify-center rounded-full px-2.5 text-center text-[clamp(0.75rem,3.6vw,0.875rem)] font-semibold leading-tight transition-colors ${
               filter === status
                 ? "bg-blue-600 text-white"
                 : "bg-white text-gray-600 shadow-sm ring-1 ring-black/5 hover:bg-gray-50 dark:bg-gray-900 dark:text-gray-300 dark:ring-white/10 dark:hover:bg-gray-800"
@@ -237,26 +240,6 @@ export default function DownloadList() {
             </span>
           </button>
         ))}
-      </div>
-
-      <div
-        role="note"
-        aria-label={t("downloads.warning")}
-        title={t("downloads.warning")}
-        className="mb-5 min-w-0 max-w-full overflow-hidden rounded-2xl bg-amber-50 px-2.5 py-3 text-center leading-relaxed text-amber-800 ring-1 ring-amber-200/70 dark:bg-amber-950/30 dark:text-amber-300 dark:ring-amber-800/50"
-      >
-        <span
-          aria-hidden="true"
-          className="block whitespace-nowrap text-[clamp(0.625rem,3.1vw,0.75rem)] xl:hidden"
-        >
-          {t("downloads.warningShort")}
-        </span>
-        <span
-          aria-hidden="true"
-          className="hidden whitespace-nowrap text-xs xl:block"
-        >
-          {t("downloads.warning")}
-        </span>
       </div>
 
       {previewEnabled && (

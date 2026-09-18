@@ -31,6 +31,13 @@ export interface RemotePackage {
   etag: string;
 }
 
+export interface UploadProgress {
+  phase: 'queued' | 'uploading' | 'verifying';
+  uploadedBytes: number;
+  totalBytes: number;
+  bytesPerSecond: number;
+}
+
 export interface DownloadTask {
   id: string;
   software: Software;
@@ -48,6 +55,7 @@ export interface DownloadTask {
     | "failed";
   progress: number;
   speed: string;
+  uploadProgress?: UploadProgress;
   error?: string;
   filePath?: string;
   /** Set only after signing finished. Allows upload-only recovery after restart. */

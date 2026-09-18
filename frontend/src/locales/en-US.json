@@ -170,6 +170,14 @@
       "uploading": "Uploading to R2",
       "injecting": "Injecting"
     },
+    "upload": {
+      "queued": "Queued for R2",
+      "verifying": "Verifying upload",
+      "queuedHint": "Waiting for the previous upload to finish.",
+      "preparingHint": "Preparing upload…",
+      "verifyingHint": "All bytes uploaded. Verifying the R2 object before releasing the local file…",
+      "measuringSpeed": "Waiting for the first part"
+    },
     "preview": {
       "badge": "Preview",
       "description": "Sample packages are shown for design preview only.",

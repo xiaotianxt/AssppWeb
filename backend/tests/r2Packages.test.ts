@@ -105,6 +105,49 @@ it('keeps an upload failure across restart and retries without downloading or si
   });
 });
 
+it('resets download progress for archival and exposes acknowledged upload bytes', async () => {
+  const manager = await import('../src/services/downloadManager.js');
+  let report!: (value: import('../src/types/index.js').UploadProgress) => void;
+  let finish!: (value: typeof remote) => void;
+  storage.upload.mockImplementation((_file, _id, onProgress) => {
+    report = onProgress;
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  manager.archivePackage(id);
+  expect(manager.getTask(id)).toMatchObject({
+    status: 'uploading',
+    progress: 0,
+    speed: '',
+    uploadProgress: { phase: 'queued' },
+  });
+  report({
+    phase: 'uploading',
+    uploadedBytes: 2,
+    totalBytes: 3,
+    bytesPerSecond: 1,
+  });
+  expect(manager.sanitizeTaskForResponse(manager.getTask(id)!)).toMatchObject({
+    progress: 66,
+    uploadProgress: { uploadedBytes: 2, totalBytes: 3 },
+  });
+  report({
+    phase: 'verifying',
+    uploadedBytes: 3,
+    totalBytes: 3,
+    bytesPerSecond: 1,
+  });
+  expect(manager.getTask(id)?.status).toBe('uploading');
+  finish(remote);
+  await waitUntilSettled(manager);
+  expect(manager.getTask(id)).toMatchObject({
+    status: 'completed',
+    progress: 100,
+  });
+  expect(manager.getTask(id)?.uploadProgress).toBeUndefined();
+});
+
 it('blocks deletion during upload and retains the remote record if deletion fails', async () => {
   const manager = await import('../src/services/downloadManager.js');
   let finish!: (value: typeof remote) => void;

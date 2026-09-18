@@ -61,6 +61,13 @@ export interface VersionMetadata {
   releaseDate: string;
 }
 
+export interface UploadProgress {
+  phase: 'queued' | 'uploading' | 'verifying';
+  uploadedBytes: number;
+  totalBytes: number;
+  bytesPerSecond: number;
+}
+
 export interface DownloadTask {
   id: string;
   software: Software;
@@ -75,6 +82,7 @@ export interface DownloadTask {
     | "failed";
   progress: number;
   speed: string;
+  uploadProgress?: UploadProgress;
   error?: string;
   hasFile?: boolean;
   storage?: 'local' | 'r2';
