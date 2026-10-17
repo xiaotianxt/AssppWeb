@@ -29,7 +29,7 @@ describe("apple/bag", () => {
     const result = await fetchBag("aabbccddeeff");
 
     expect(result.authURL).toBe(
-      "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate",
+      "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate/",
     );
   });
 
@@ -106,10 +106,20 @@ describe("apple/bag", () => {
       ).toBe("https://auth.itunes.apple.com/auth/v1/native/fast/");
     });
 
-    it("leaves legacy endpoints on other hosts unchanged", () => {
-      const legacy =
-        "https://buy.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate";
-      expect(normalizeAuthURL(legacy)).toBe(legacy);
+    it.each(["buy", "p6-buy"])("adds a slash on %s while preserving query parameters", (host) => {
+      const base = `https://${host}.itunes.apple.com/WebObjects/MZFinance.woa/wa/authenticate`;
+      expect(normalizeAuthURL(`${base}?guid=aabb&foo=bar`)).toBe(
+        `${base}/?guid=aabb&foo=bar`,
+      );
+      expect(normalizeAuthURL(`${base}/?guid=aabb`)).toBe(`${base}/?guid=aabb`);
+    });
+
+    it.each([
+      "https://example.com/WebObjects/MZFinance.woa/wa/authenticate",
+      "https://buy.itunes.apple.com/other",
+      "not a URL",
+    ])("leaves unrelated URLs unchanged: %s", (url) => {
+      expect(normalizeAuthURL(url)).toBe(url);
     });
   });
 });

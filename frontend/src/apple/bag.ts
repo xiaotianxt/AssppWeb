@@ -17,7 +17,8 @@ const NATIVE_AUTH_HOST = "auth.itunes.apple.com";
 
 // The bag advertises the native auth endpoint without the /fast/ sub-path that
 // the login flow requires; the no-trailing-slash variant 301s to an HTML page.
-// Legacy endpoints on other hosts pass through unchanged.
+// Legacy buy/pod endpoints also require a trailing slash on /authenticate.
+// Normalize only the initial bag URL; server-provided redirects stay unchanged.
 export function normalizeAuthURL(rawURL: string): string {
   let url: URL;
   try {
@@ -26,6 +27,14 @@ export function normalizeAuthURL(rawURL: string): string {
     return rawURL;
   }
   if (url.hostname !== NATIVE_AUTH_HOST) {
+    if (
+      url.protocol === "https:" &&
+      /^(?:buy|p\d+-buy)\.itunes\.apple\.com$/.test(url.hostname) &&
+      url.pathname === "/WebObjects/MZFinance.woa/wa/authenticate"
+    ) {
+      url.pathname += "/";
+      return url.toString();
+    }
     return rawURL;
   }
   let path = url.pathname.replace(/\/+$/, "");
